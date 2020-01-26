@@ -1176,7 +1176,32 @@ void csr_matvecs(const I n_row,
 }
 
 
+/* Compute the first offset at or beyond the given column in a given row.
+ *
+ * This requires the indices to be sorted.
+ *
+ *
+ * Input Arguments:
+ *   I Ap[n_row+1]    - row pointer
+ *   I Aj[nnz(A)]     - column indices
+ *   I row            - the row of interest
+ *   I col            - the column of interest
+ */
+template<class I>
+I csr_column_offset_sorted(const I Ap[],
+                           const I Aj[],
+                           const I row,
+                           const I col) {
+    const I row_start = Ap[row];
+    const I row_end   = Ap[row+1];
 
+    if (row_start < row_end) {
+        const I *pointer = std::lower_bound(Aj + row_start, Aj + row_end, col);
+        return pointer - Aj;
+    } else {
+        return row_end;
+    }
+}
 
 template<class I, class T>
 void get_csr_submatrix(const I n_row,
@@ -1197,14 +1222,23 @@ void get_csr_submatrix(const I n_row,
     I new_nnz = 0;
     I kk = 0;
 
+    bool is_sorted = csr_has_sorted_indices(n_row, Ap, Aj);
+
     // Count nonzeros total/per row.
     for(I i = 0; i < new_n_row; i++){
-        I row_start = Ap[ir0+i];
-        I row_end   = Ap[ir0+i+1];
+        const I row = ir0 + i;
+        if (is_sorted) {
+            I start = csr_column_offset_sorted(Ap, Aj, row, ic0);
+            I end = csr_column_offset_sorted(Ap, Aj, row, ic1);
+            new_nnz += (end - start);
+        } else {
+            I row_start = Ap[row];
+            I row_end   = Ap[row+1];
 
-        for(I jj = row_start; jj < row_end; jj++){
-            if ((Aj[jj] >= ic0) && (Aj[jj] < ic1)) {
-                new_nnz++;
+            for(I jj = row_start; jj < row_end; jj++){
+                if ((Aj[jj] >= ic0) && (Aj[jj] < ic1)) {
+                    new_nnz++;
+                }
             }
         }
     }
@@ -1217,14 +1251,24 @@ void get_csr_submatrix(const I n_row,
     // Assign.
     (*Bp)[0] = 0;
     for(I i = 0; i < new_n_row; i++){
-        I row_start = Ap[ir0+i];
-        I row_end   = Ap[ir0+i+1];
-
-        for(I jj = row_start; jj < row_end; jj++){
-            if ((Aj[jj] >= ic0) && (Aj[jj] < ic1)) {
+        const I row = ir0 + i;
+        if (is_sorted) {
+            I start = csr_column_offset_sorted(Ap, Aj, row, ic0);
+            I end = csr_column_offset_sorted(Ap, Aj, row, ic1);
+            for (I jj = start; jj < end; jj++) {
                 (*Bj)[kk] = Aj[jj] - ic0;
                 (*Bx)[kk] = Ax[jj];
                 kk++;
+            }
+        } else {
+            I row_start = Ap[row];
+            I row_end   = Ap[row+1];
+            for(I jj = row_start; jj < row_end; jj++){
+                if ((Aj[jj] >= ic0) && (Aj[jj] < ic1)) {
+                    (*Bj)[kk] = Aj[jj] - ic0;
+                    (*Bx)[kk] = Ax[jj];
+                    kk++;
+                }
             }
         }
         (*Bp)[i+1] = kk;
@@ -1581,6 +1625,7 @@ int csr_sample_offsets(const I n_row,
 
             if (row_start < row_end)
             {
+
                 const I offset = std::lower_bound(Aj + row_start, Aj + row_end, j) - Aj;
 
                 if (offset < row_end && Aj[offset] == j)
