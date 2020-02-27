@@ -6,6 +6,7 @@ from __future__ import division, print_function, absolute_import
 import warnings
 import time
 import timeit
+import itertools
 try:
     import cPickle as pickle
 except ImportError:
@@ -290,10 +291,10 @@ class Getset(Benchmark):
 
 
 class NullSlice(Benchmark):
-    params = [[0.05, 0.01], ['csr', 'csc', 'lil']]
-    param_names = ['density', 'format']
+    params = [[0.05, 0.01], ['csr', 'csc', 'lil'], [False, True]]
+    param_names = ['density', 'format', 'canonical']
 
-    def _setup(self, density, format):
+    def _setup(self, density, format, canonical):
         n = 100000
         k = 1000
 
@@ -306,37 +307,55 @@ class NullSlice(Benchmark):
         X = coo_matrix((data, (row, col)), shape=(n, k))
         X.sum_duplicates()
         X = X.asformat(format)
-        with open('{}-{}.pck'.format(density, format), 'wb') as f:
+
+        if format in ('csr', 'csc'):
+            if not canonical:
+                for i in range(k):
+                    start, end = X.indptr[i:i+2]
+                    if end - start >= 2:
+                        idx = [start, start+1]
+                        X.indices[idx] = X.indices[idx[::-1]]
+                        break
+
+            assert X.has_canonical_format == canonical
+
+        with open('{}-{}-{}.pck'.format(density, format, canonical), 'wb') as f:
             pickle.dump(X, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     def setup_cache(self):
-        for density in self.params[0]:
-            for fmt in self.params[1]:
-                self._setup(density, fmt)
+        for density, fmt, canonical in itertools.product(*self.params):
+            self._setup(density, fmt, canonical)
 
     setup_cache.timeout = 120
 
-    def setup(self, density, format):
+    def setup(self, density, format, canonical):
         # Unpickling is faster than computing the random matrix...
-        with open('{}-{}.pck'.format(density, format), 'rb') as f:
+        with open('{}-{}-{}.pck'.format(density, format, canonical), 'rb') as f:
             self.X = pickle.load(f)
 
-    def time_getrow(self, density, format):
+    def time_getrow(self, density, format, canonical):
         self.X.getrow(100)
 
-    def time_getcol(self, density, format):
+    def time_getcol(self, density, format, canonical):
         self.X.getcol(100)
 
-    def time_3_rows(self, density, format):
+    def time_1000x1000_submatrix_slice(self, density, format, canonical):
+        self.X[0:1000, 0:1000]
+
+    def time_1000x1000_submatrix_array(self, density, format, canonical):
+        indices = np.arange(1000)[:, np.newaxis]
+        self.X[indices, indices]
+
+    def time_3_rows(self, density, format, canonical):
         self.X[[0, 100, 105], :]
 
-    def time_10000_rows(self, density, format):
+    def time_10000_rows(self, density, format, canonical):
         self.X[np.arange(10000), :]
 
-    def time_3_cols(self, density, format):
+    def time_3_cols(self, density, format, canonical):
         self.X[:, [0, 100, 105]]
 
-    def time_100_cols(self, density, format):
+    def time_100_cols(self, density, format, canonical):
         self.X[:, np.arange(100)]
 
     # Retain old benchmark results (remove this if changing the benchmark)
